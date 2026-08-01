@@ -4,10 +4,10 @@ import Footer from "@/components/Footer";
 
 export default function Page() {
   return (
-    <main className="min-h-screen">
-        <Hero />
-        <Features />
-        <Footer />
+    <main className="min-h-screen bg-[var(--bg)] text-[var(--primary)]">
+      <Hero />
+      <Features />
+      <Footer />
     </main>
   );
 }
