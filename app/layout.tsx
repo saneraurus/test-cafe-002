@@ -1,10 +1,10 @@
 import type { Metadata } from "next";
 import type { ReactNode, CSSProperties } from "react";
-import { Lora, Source_Sans_3 } from "next/font/google";
+import { Bebas_Neue, Lora } from "next/font/google";
 import "./globals.css";
 
-const headings = Lora({ subsets: ["latin"], variable: "--font-headings" });
-const body = Source_Sans_3({ subsets: ["latin"], variable: "--font-body" });
+const headings = Bebas_Neue({ subsets: ["latin"], variable: "--font-headings" });
+const body = Lora({ subsets: ["latin"], variable: "--font-body" });
 
 export const metadata: Metadata = {
   title: "Generated Site",
@@ -21,11 +21,11 @@ export default function RootLayout({
       <body
         className={`${headings.variable} ${body.variable}`}
         style={{
-          "--primary": "#292524",
-          "--secondary": "#78716c",
-          "--accent": "#d6d3d1",
-          "--bg": "#fafaf9",
-          "--muted": "#a8a29e",
+          "--primary": "#1e1b4b",
+          "--secondary": "#6366f1",
+          "--accent": "#a5b4fc",
+          "--bg": "#eef2ff",
+          "--muted": "#818cf8",
         } as CSSProperties}
       >
         {children}
