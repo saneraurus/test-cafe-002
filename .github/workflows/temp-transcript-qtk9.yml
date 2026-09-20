@@ -1,0 +1,148 @@
+name: Temp YouTube Transcript
+
+on:
+  push:
+    paths:
+      - ".github/workflows/temp-transcript-qtk9.yml"
+  workflow_dispatch:
+
+jobs:
+  transcribe:
+    runs-on: ubuntu-latest
+    timeout-minutes: 60
+    steps:
+      - uses: actions/checkout@v4
+      - name: Install system dependencies
+        run: |
+          sudo apt-get update
+          sudo apt-get install -y ffmpeg
+          python -m pip install --upgrade pip
+          pip install requests python-docx yt-dlp faster-whisper
+      - name: Fetch or transcribe and create DOCX
+        shell: bash
+        run: |
+          mkdir -p output
+          python - <<'PY'
+          import os, re, sys, subprocess, requests
+          from pathlib import Path
+          from docx import Document
+          from docx.shared import Pt, Inches
+          from docx.enum.text import WD_ALIGN_PARAGRAPH
+
+          VIDEO_ID = "QtK9MuT3j7I"
+          VIDEO_URL = "https://youtu.be/QtK9MuT3j7I?feature=shared"
+          OUT = Path("output")
+          transcript_path = OUT / "transcript.txt"
+          audio_path = OUT / "audio.wav"
+          docx_path = OUT / "REKAMAN_WAWANCARA_KEMLU_2026_Transkrip.docx"
+          status_path = OUT / "status.txt"
+
+          def log(msg):
+              print(msg, flush=True)
+              with status_path.open("a", encoding="utf-8") as f:
+                  f.write(msg + "\n")
+
+          def good_text(s):
+              if not s or len(s.strip()) < 300:
+                  return False
+              low = s.lower()
+              bad = ["<!doctype html", "<html", "no transcript", "not found", "rate limit", "error"]
+              return not any(x in low[:1000] for x in bad)
+
+          transcript = None
+          endpoints = [
+              f"https://youtubegpt.ai/api/transcript?v={VIDEO_ID}&format=txt-timestamps",
+              f"https://youtube-transcript.ai/transcript/{VIDEO_ID}.txt",
+          ]
+          for ep in endpoints:
+              try:
+                  log(f"TRY_API {ep}")
+                  r = requests.get(ep, timeout=45, headers={"User-Agent":"Mozilla/5.0"})
+                  log(f"API_STATUS {r.status_code} LEN {len(r.text)}")
+                  if r.ok and good_text(r.text):
+                      transcript = r.text.strip()
+                      log("API_TRANSCRIPT_OK")
+                      break
+              except Exception as e:
+                  log(f"API_ERROR {type(e).__name__}: {e}")
+
+          if transcript is None:
+              log("FALLBACK_AUDIO_START")
+              cmds = [
+                  [sys.executable, "-m", "yt_dlp", "-f", "bestaudio/best", "-x", "--audio-format", "wav", "--audio-quality", "0", "-o", "downloaded.%(ext)s", VIDEO_URL],
+                  [sys.executable, "-m", "yt_dlp", "--extractor-args", "youtube:player_client=android_vr", "-f", "bestaudio/best", "-x", "--audio-format", "wav", "-o", "downloaded.%(ext)s", VIDEO_URL],
+                  [sys.executable, "-m", "yt_dlp", "--extractor-args", "youtube:player_client=web_safari", "-f", "bestaudio/best", "-x", "--audio-format", "wav", "-o", "downloaded.%(ext)s", VIDEO_URL],
+              ]
+              downloaded = None
+              for i, cmd in enumerate(cmds, 1):
+                  try:
+                      log(f"YTDLP_ATTEMPT_{i}")
+                      p = subprocess.run(cmd, text=True, capture_output=True, timeout=900)
+                      log(f"YTDLP_RC {p.returncode}")
+                      (OUT / f"ytdlp_attempt_{i}.log").write_text((p.stdout or "") + "\nSTDERR\n" + (p.stderr or ""), encoding="utf-8")
+                      cands = list(Path(".").glob("downloaded*.wav"))
+                      if p.returncode == 0 and cands:
+                          downloaded = cands[0]
+                          break
+                  except Exception as e:
+                      log(f"YTDLP_ERROR_{i} {type(e).__name__}: {e}")
+              if downloaded is None:
+                  raise RuntimeError("All yt-dlp attempts failed; inspect logs.")
+
+              subprocess.run(["ffmpeg","-y","-i",str(downloaded),"-ac","1","-ar","16000",str(audio_path)], check=True)
+              log(f"AUDIO_READY {audio_path.stat().st_size} bytes")
+
+              from faster_whisper import WhisperModel
+              log("WHISPER_MODEL_LOAD base")
+              model = WhisperModel("base", device="cpu", compute_type="int8")
+              segments, info = model.transcribe(str(audio_path), language="id", beam_size=5, vad_filter=True)
+
+              def fmt(sec):
+                  sec = max(0, int(sec))
+                  return f"{sec//3600:02d}:{(sec%3600)//60:02d}:{sec%60:02d}"
+              lines=[]
+              for seg in segments:
+                  txt=(seg.text or "").strip()
+                  if txt:
+                      lines.append(f"[{fmt(seg.start)} - {fmt(seg.end)}] {txt}")
+              transcript="\n".join(lines)
+              log(f"WHISPER_DONE {len(lines)} segments")
+
+          transcript_path.write_text(transcript, encoding="utf-8")
+          log(f"TRANSCRIPT_SAVED {len(transcript)} chars")
+
+          doc=Document()
+          sec=doc.sections[0]
+          sec.top_margin=Inches(0.8); sec.bottom_margin=Inches(0.8); sec.left_margin=Inches(0.9); sec.right_margin=Inches(0.9)
+          doc.styles["Normal"].font.name="Aptos"; doc.styles["Normal"].font.size=Pt(10.5)
+          p=doc.add_paragraph(); p.alignment=WD_ALIGN_PARAGRAPH.CENTER
+          r=p.add_run("REKAMAN WAWANCARA KEMLU 2026"); r.bold=True; r.font.size=Pt(16)
+          p=doc.add_paragraph(); p.alignment=WD_ALIGN_PARAGRAPH.CENTER
+          r=p.add_run("Transkrip Bertimestamp"); r.italic=True; r.font.size=Pt(11)
+          doc.add_paragraph("Sumber: YouTube video ID QtK9MuT3j7I")
+          doc.add_paragraph()
+          ts_re=re.compile(r"\[(\d{2}):(\d{2}):(\d{2})(?:\s*-\s*\d{2}:\d{2}:\d{2})?\]")
+          bucket=None
+          for raw in transcript.splitlines():
+              line=raw.strip()
+              if not line: continue
+              m=ts_re.search(line)
+              if m:
+                  seconds=int(m.group(1))*3600+int(m.group(2))*60+int(m.group(3))
+                  b=seconds//900
+                  if b!=bucket:
+                      bucket=b
+                      start=b*15; end=start+15
+                      doc.add_heading(f"Bagian {start:02d}:00 - {end:02d}:00", level=1)
+              doc.add_paragraph(line)
+          doc.save(docx_path)
+          log(f"DOCX_SAVED {docx_path.stat().st_size} bytes")
+          PY
+      - name: Upload outputs
+        if: always()
+        uses: actions/upload-artifact@v4
+        with:
+          name: qtk9-transcript-output
+          path: output/
+          if-no-files-found: error
+          retention-days: 1
